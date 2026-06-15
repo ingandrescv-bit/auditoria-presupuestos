@@ -1,9 +1,0 @@
-services:
-  - type: web
-    name: auditoria-presupuestos
-    runtime: python
-    buildCommand: "pip install -r requirements.txt && cd frontend && npm install && npm run build && cd .. && cp -r frontend/dist/* static/"
-    startCommand: "uvicorn main:app --host 0.0.0.0 --port $PORT"
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.11.0
