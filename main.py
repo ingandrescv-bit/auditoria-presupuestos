@@ -325,70 +325,13 @@ def escribir_excel(all_rows, estilos_orig, errMap, resumen, sheet_name):
     return buf
 
 # ── ENDPOINT PRINCIPAL ────────────────────────────────────────
-@app.post("/api/auditar")
-async def auditar(
-    file: UploadFile = File(...),
-    hoja: str = Form(""),
-    region: str = Form("bogota"),
-    tipo: str = Form("retail_mediano"),
-):
-    ext = os.path.splitext(file.filename or "")[1].lower()
-    content = await file.read()
 
-    # Guarda temporalmente
-    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
-        tmp.write(content); tmp_path = tmp.name
+# ── ENDPOINTS ─────────────────────────────────────────────────
+@app.get("/api/ping")
+async def ping():
+    return {"status": "ok", "msg": "servidor activo"}
 
-    try:
-        if ext == ".numbers":
-            # Lee con numbers_parser
-            from numbers_parser import Document
-            doc = Document(tmp_path)
-            sheet_names = [s.name for s in doc.sheets]
-            if not hoja or hoja not in sheet_names:
-                hoja = next((s for s in sheet_names if "obra" in s.lower() and "demol" not in s.lower()), sheet_names[0])
-
-            all_rows = []
-            for sheet in doc.sheets:
-                if sheet.name != hoja: continue
-                for row in sheet.tables[0].iter_rows():
-                    rv = []
-                    for cell in row:
-                        try: rv.append(cell.value)
-                        except: rv.append(None)
-                    all_rows.append(rv)
-                break
-
-            estilos_orig = leer_estilos_numbers(tmp_path, hoja)
-
-        elif ext in (".xlsx", ".xls"):
-            wb_orig = openpyxl.load_workbook(tmp_path, data_only=True)
-            sheet_names = wb_orig.sheetnames
-            if not hoja or hoja not in sheet_names:
-                hoja = next((s for s in sheet_names if "obra" in s.lower() and "demol" not in s.lower()), sheet_names[0])
-
-            ws_orig = wb_orig[hoja]
-            all_rows = [[cell.value for cell in row] for row in ws_orig.iter_rows()]
-            estilos_orig = leer_estilos_xlsx(ws_orig)
-        else:
-            raise HTTPException(400, "Formato no soportado. Usa .xlsx o .numbers")
-
-        errMap  = detectar_errores(all_rows)
-        resumen = calcular_resumen(all_rows, errMap)
-        buf     = escribir_excel(all_rows, estilos_orig, errMap, resumen, hoja)
-
-        nombre  = f"Auditoria_{hoja.replace(' ','_')}.xlsx"
-        return StreamingResponse(
-            buf,
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": f'attachment; filename="{nombre}"',
-                     "X-Errores": str(resumen["n_err"]),
-                     "X-Puntaje": str(resumen["puntaje"])}
-        )
-    finally:
-        os.unlink(tmp_path)
-
-@app.get("/api/hojas")
+@app.post("/api/hojas")
 async def listar_hojas(file: UploadFile = File(...)):
     ext = os.path.splitext(file.filename or "")[1].lower()
     content = await file.read()
@@ -405,20 +348,72 @@ async def listar_hojas(file: UploadFile = File(...)):
     finally:
         os.unlink(tmp_path)
 
-# ── Sirve el frontend (HTML directo, sin compilacion) ────────
-from fastapi.responses import HTMLResponse, FileResponse
-import os
+@app.post("/api/auditar")
+async def auditar(
+    file: UploadFile = File(...),
+    hoja: str = Form(""),
+    region: str = Form("bogota"),
+    tipo: str = Form("retail_mediano"),
+):
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in (".xlsx", ".xls", ".numbers"):
+        raise HTTPException(400, "Formato no soportado. Usa .xlsx o .numbers")
+    content = await file.read()
+    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+        tmp.write(content); tmp_path = tmp.name
+    try:
+        if ext == ".numbers":
+            from numbers_parser import Document
+            doc = Document(tmp_path)
+            sheet_names = [s.name for s in doc.sheets]
+            if not hoja or hoja not in sheet_names:
+                hoja = next((s for s in sheet_names if "obra" in s.lower() and "demol" not in s.lower()), sheet_names[0])
+            all_rows = []
+            for sheet in doc.sheets:
+                if sheet.name != hoja: continue
+                for row in sheet.tables[0].iter_rows():
+                    rv = []
+                    for cell in row:
+                        try: rv.append(cell.value)
+                        except: rv.append(None)
+                    all_rows.append(rv)
+                break
+            estilos_orig = leer_estilos_numbers(tmp_path, hoja)
+        else:
+            wb_orig = openpyxl.load_workbook(tmp_path, data_only=True)
+            sheet_names = wb_orig.sheetnames
+            if not hoja or hoja not in sheet_names:
+                hoja = next((s for s in sheet_names if "obra" in s.lower() and "demol" not in s.lower()), sheet_names[0])
+            ws_orig = wb_orig[hoja]
+            all_rows = [[cell.value for cell in row] for row in ws_orig.iter_rows()]
+            estilos_orig = leer_estilos_xlsx(ws_orig)
+
+        errMap  = detectar_errores(all_rows)
+        resumen = calcular_resumen(all_rows, errMap)
+        buf     = escribir_excel(all_rows, estilos_orig, errMap, resumen, hoja)
+        nombre  = f"Auditoria_{hoja.replace(' ','_')}.xlsx"
+        return StreamingResponse(buf,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{nombre}"',
+                     "X-Errores": str(resumen["n_err"]),
+                     "X-Puntaje": str(resumen["puntaje"]),
+                     "Access-Control-Expose-Headers": "X-Errores,X-Puntaje,Content-Disposition"})
+    finally:
+        os.unlink(tmp_path)
+
+# ── Sirve el frontend ──────────────────────────────────────────
+from fastapi.responses import FileResponse
 
 @app.get("/")
 async def frontend():
-    html_path = os.path.join(os.path.dirname(__file__), "index.html")
+    html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html")
     if os.path.exists(html_path):
         return FileResponse(html_path, media_type="text/html")
-    return {"status": "API ok"}
+    return {"status": "API ok - sube index.html a la raiz"}
 
 @app.get("/{full_path:path}")
 async def spa(full_path: str):
-    html_path = os.path.join(os.path.dirname(__file__), "index.html")
+    html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html")
     if os.path.exists(html_path):
         return FileResponse(html_path, media_type="text/html")
     return {"msg": "no encontrado"}
