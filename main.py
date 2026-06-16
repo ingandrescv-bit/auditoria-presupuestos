@@ -405,31 +405,20 @@ async def listar_hojas(file: UploadFile = File(...)):
     finally:
         os.unlink(tmp_path)
 
-@app.get("/")
-def root(): return {"status": "ok", "msg": "Auditoria API lista"}
-
-# ── Sirve el frontend React compilado ────────────────────────
+# ── Sirve el frontend (HTML directo, sin compilacion) ────────
+from fastapi.responses import HTMLResponse, FileResponse
 import os
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
-
-static_dir = os.path.join(os.path.dirname(__file__), "static")
 
 @app.get("/")
-async def root():
-    index = os.path.join(static_dir, "index.html")
-    if os.path.exists(index):
-        return FileResponse(index)
-    return {"status": "API ok - frontend no compilado"}
+async def frontend():
+    html_path = os.path.join(os.path.dirname(__file__), "index.html")
+    if os.path.exists(html_path):
+        return FileResponse(html_path, media_type="text/html")
+    return {"status": "API ok"}
 
 @app.get("/{full_path:path}")
 async def spa(full_path: str):
-    # Sirve assets estaticos si existen
-    asset = os.path.join(static_dir, full_path)
-    if os.path.exists(asset) and os.path.isfile(asset):
-        return FileResponse(asset)
-    # Todo lo demas -> index.html (SPA routing)
-    index = os.path.join(static_dir, "index.html")
-    if os.path.exists(index):
-        return FileResponse(index)
+    html_path = os.path.join(os.path.dirname(__file__), "index.html")
+    if os.path.exists(html_path):
+        return FileResponse(html_path, media_type="text/html")
     return {"msg": "no encontrado"}
